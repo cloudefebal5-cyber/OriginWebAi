@@ -1,0 +1,9 @@
+{
+  "name": "origin-hub",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Origin Hub — frontend (index2.html) + Vercel serverless AI proxy backed by Supabase.",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0"
+  }
+}
