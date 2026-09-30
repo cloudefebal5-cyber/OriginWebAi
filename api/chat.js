@@ -38,12 +38,12 @@ module.exports = async function handler(req, res) {
   if (typeof body === 'string') {
     try { body = JSON.parse(body); } catch (e) { body = {}; }
   }
-  const { model, messages } = body || {};
+  const { model, messages, system } = body || {};
   if (!Array.isArray(messages) || messages.length === 0) {
     res.status(400).json({ message: 'messages[] is required' });
     return;
   }
-  const provider = ['claude', 'openai', 'gemini'].includes(model) ? model : 'claude';
+  const provider = ['claude', 'openai', 'gemini'].includes(model) ? model : 'gemini';
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 55000);
@@ -57,9 +57,9 @@ module.exports = async function handler(req, res) {
   const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
   try {
-    if (provider === 'claude') await streamClaude(messages, controller.signal, send);
-    else if (provider === 'openai') await streamOpenAI(messages, controller.signal, send);
-    else await streamGemini(messages, controller.signal, send);
+    if (provider === 'claude') await streamClaude(messages, system, controller.signal, send);
+    else if (provider === 'openai') await streamOpenAI(messages, system, controller.signal, send);
+    else await streamGemini(messages, system, controller.signal, send);
   } catch (err) {
     console.error(`[${provider}] stream error:`, err);
     send({ error: friendlyProviderError(err) });
@@ -79,7 +79,7 @@ function friendlyProviderError(err) {
   return 'Could not reach the AI provider.';
 }
 
-async function streamClaude(messages, signal, send) {
+async function streamClaude(messages, system, signal, send) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) { send({ error: 'AI_PROVIDER_NOT_CONFIGURED: set ANTHROPIC_API_KEY on the server' }); return; }
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -94,6 +94,7 @@ async function streamClaude(messages, signal, send) {
       model: MODELS.claude,
       max_tokens: 2048,
       stream: true,
+      system: system || undefined,
       messages: messages.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })),
     }),
   });
@@ -105,7 +106,7 @@ async function streamClaude(messages, signal, send) {
   });
 }
 
-async function streamOpenAI(messages, signal, send) {
+async function streamOpenAI(messages, system, signal, send) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) { send({ error: 'AI_PROVIDER_NOT_CONFIGURED: set OPENAI_API_KEY on the server' }); return; }
   const resp = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -118,7 +119,10 @@ async function streamOpenAI(messages, signal, send) {
     body: JSON.stringify({
       model: MODELS.openai,
       stream: true,
-      messages: messages.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })),
+      messages: [
+        ...(system ? [{ role: 'system', content: system }] : []),
+        ...messages.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }))
+      ],
     }),
   });
   if (!resp.ok) { const t = await resp.text().catch(()=> ''); const e = new Error(t); e.status = resp.status; throw e; }
@@ -128,7 +132,7 @@ async function streamOpenAI(messages, signal, send) {
   });
 }
 
-async function streamGemini(messages, signal, send) {
+async function streamGemini(messages, system, signal, send) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) { send({ error: 'AI_PROVIDER_NOT_CONFIGURED: set GEMINI_API_KEY on the server' }); return; }
   const contents = messages.map(m => ({
@@ -140,7 +144,10 @@ async function streamGemini(messages, signal, send) {
     method: 'POST',
     signal,
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ contents }),
+    body: JSON.stringify({
+      contents,
+      ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {})
+    }),
   });
   if (!resp.ok) { const t = await resp.text().catch(()=> ''); const e = new Error(t); e.status = resp.status; throw e; }
   await pumpSSE(resp.body, (evt) => {
