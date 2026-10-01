@@ -4,6 +4,18 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>SquareAI · Think. Create. Build.</title>
+  <script>
+    window.SQUAREAI_CONFIG = {
+      SUPABASE_URL: 'https://fcewsjtjwvalksjjebob.supabase.co',
+      SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZjZXdzanRqd3ZhbGtzamplYm9iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkyMDg0MTgsImV4cCI6MjEwNDc4NDQxOH0.wAyhE3otwO6ir48Tj4OT7jorfV0XJWWNPzaqzPTXtds'
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
   <style>
     /* ============================================================
        SQUAREAI v1.0 — DESIGN SYSTEM & GLOBAL STYLES
@@ -2652,6 +2664,10 @@
           <div class="user-plan">Free plan</div>
         </div>
       </button>
+      <button class="sidebar-footer-btn" id="signOutBtn" aria-label="Sign out">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        <span class="sidebar-label">Sign out</span>
+      </button>
     </div>
   </aside>
 
@@ -2733,8 +2749,8 @@
 /* ================================================================
    SQUAREAI v1.0 — APPLICATION LOGIC
    ================================================================
-   This is a frontend-only demo. All data is stored in localStorage.
-   The mock AI engine simulates responses. Authentication is demo-only.
+  Supabase Auth protects access, chat history is stored in Supabase,
+  and AI responses stream through the authenticated /api/chat route.
    ================================================================ */
 
 // ================================================================
@@ -2742,6 +2758,13 @@
 // ================================================================
 const $ = (sel, ctx = document) => ctx.querySelector(sel);
 const $$ = (sel, ctx = document) => Array.from(ctx.querySelectorAll(sel));
+const CONFIG = window.SQUAREAI_CONFIG || {};
+const supabaseClient = CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY && window.supabase
+  ? window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+    })
+  : null;
+const SQUAREAI_SYSTEM_PROMPT = `You are SquareAI, an AI assistant created by programmer Anshu. If asked your name, identify yourself as SquareAI, never as Gemini. If asked who made you or who your founder is, say: "Mujhe programmer Anshu ne banaya hai." For math, explain like a school textbook: show the formula, put each calculation on its own line, explain steps, and clearly mark the final answer. Use LaTeX with \\( ... \\) inline and $$ ... $$ for displayed equations. Reply in the user's language.`;
 
 function generateId(prefix = '') {
   return prefix + Math.random().toString(36).substring(2, 10) + Date.now().toString(36).slice(-4);
@@ -2836,6 +2859,10 @@ const DB = {
   }
 };
 
+function conversationStorageKey() {
+  return State.user ? `${DB.keys.conversations}_${State.user.id}` : DB.keys.conversations;
+}
+
 // ================================================================
 // 3. APPLICATION STATE
 // ================================================================
@@ -2874,6 +2901,7 @@ const State = {
 const MODELS = {
   smart: {
     id: 'smart',
+    provider: 'gemini',
     name: 'SquareAI Smart',
     desc: 'Balanced performance for everyday tasks',
     speed: 'Balanced',
@@ -2881,6 +2909,7 @@ const MODELS = {
   },
   fast: {
     id: 'fast',
+    provider: 'gemini',
     name: 'SquareAI Fast',
     desc: 'Quick responses for simple questions',
     speed: 'Fast',
@@ -2888,6 +2917,7 @@ const MODELS = {
   },
   reasoning: {
     id: 'reasoning',
+    provider: 'claude',
     name: 'SquareAI Reasoning',
     desc: 'Designed for complex reasoning and analysis',
     speed: 'Deep',
@@ -2895,6 +2925,7 @@ const MODELS = {
   },
   coding: {
     id: 'coding',
+    provider: 'openai',
     name: 'SquareAI Coding',
     desc: 'Optimized for programming and debugging',
     speed: 'Precise',
@@ -2903,58 +2934,47 @@ const MODELS = {
 };
 
 // ================================================================
-// 4. AUTHENTICATION (DEMO)
+// 4. SUPABASE AUTHENTICATION
 // ================================================================
 const Auth = {
   isAuthenticated() {
-    return !!State.session && !!State.user;
+    return !!supabaseClient && !!State.session && !!State.user;
   },
 
-  signUp({ name, email, password }) {
-    const user = {
-      id: generateId('user_'),
-      name,
+  async signUp({ name, email, password }) {
+    if (!supabaseClient) throw new Error('Supabase is not configured.');
+    const { data, error } = await supabaseClient.auth.signUp({
       email,
-      username: email.split('@')[0],
-      createdAt: Date.now(),
-      plan: 'free'
-    };
-    DB.save(DB.keys.user, user);
-    State.user = user;
-    const session = { userId: user.id, token: generateId('sess_'), createdAt: Date.now() };
-    DB.save(DB.keys.session, session);
-    State.session = session;
-    return user;
+      password,
+      options: { data: { name }, emailRedirectTo: window.location.origin }
+    });
+    if (error) throw error;
+    return data;
   },
 
-  signIn({ email, password }) {
-    // Demo: accept any valid-looking email/password
-    const stored = DB.load(DB.keys.user);
-    let user;
-    if (stored && stored.email === email) {
-      user = stored;
-    } else {
-      user = {
-        id: generateId('user_'),
-        name: email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
-        email,
-        username: email.split('@')[0],
-        createdAt: Date.now(),
-        plan: 'free'
-      };
-      DB.save(DB.keys.user, user);
+  async signIn({ email, password }) {
+    if (!supabaseClient) throw new Error('Supabase is not configured.');
+    const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    return data;
+  },
+
+  async signInWithOAuth(provider) {
+    if (!supabaseClient) throw new Error('Supabase is not configured.');
+    const { error } = await supabaseClient.auth.signInWithOAuth({
+      provider,
+      options: { redirectTo: window.location.origin }
+    });
+    if (error) throw error;
+  },
+
+  async signOut() {
+    if (supabaseClient) {
+      const { error } = await supabaseClient.auth.signOut();
+      if (error) throw error;
     }
-    State.user = user;
-    const session = { userId: user.id, token: generateId('sess_'), createdAt: Date.now() };
-    DB.save(DB.keys.session, session);
-    State.session = session;
-    return user;
-  },
-
-  signOut() {
-    DB.delete(DB.keys.session);
     State.session = null;
-    // Keep user data for demo convenience but clear session
+    State.user = null;
   },
 
   getInitials(name) {
@@ -2964,10 +2984,8 @@ const Auth = {
 };
 
 // ================================================================
-// 5. MOCK AI ENGINE
+// 5. AI PROVIDER ENGINE
 // ================================================================
-// This function is structured so a real API can replace it later.
-// See comments at the bottom for integration guidance.
 const AIEngine = {
   // Simulated response templates
   templates: {
@@ -3092,27 +3110,55 @@ const AIEngine = {
   },
 
   // Main entry point — replace this with real API call later
-  async generate(prompt, onChunk) {
-    // Simulate network delay
-    const delay = 600 + Math.random() * 900;
-    await new Promise(r => setTimeout(r, delay));
-
-    const response = this.buildResponse(prompt);
-
-    // Simulate streaming by chunking
-    if (onChunk) {
-      const chunks = response.match(/.{1,12}/gs) || [];
-      let acc = '';
-      for (const chunk of chunks) {
-        if (State.generationAbort) break;
-        acc += chunk;
-        onChunk(acc);
-        await new Promise(r => setTimeout(r, 8));
+  async generate(input, onChunk) {
+    if (!State.session?.access_token) throw new Error('Please sign in to use SquareAI.');
+    const messages = Array.isArray(input) ? input : [{ role: 'user', content: input }];
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${State.session.access_token}`
+        },
+        body: JSON.stringify({
+          model: MODELS[State.model]?.provider || 'gemini',
+          system: SQUAREAI_SYSTEM_PROMPT,
+          messages: messages.map(message => ({ role: message.role, content: message.content }))
+        }),
+        signal: controller.signal
+      });
+      if (!response.ok || !response.body) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.message || `AI request failed (${response.status}).`);
       }
-      return acc;
-    }
 
-    return response;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let answer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split(/\r?\n\r?\n/);
+        buffer = events.pop();
+        for (const event of events) {
+          const data = event.split(/\r?\n/).find(line => line.startsWith('data:'))?.slice(5).trim();
+          if (!data || data === '[DONE]') continue;
+          const chunk = JSON.parse(data);
+          if (chunk.error) throw new Error(chunk.error);
+          if (chunk.delta) {
+            answer += chunk.delta;
+            onChunk?.(answer);
+          }
+        }
+      }
+      return answer;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 };
 
@@ -3292,6 +3338,16 @@ function renderChat() {
   $('#topbarTitle').textContent = conv.title;
 
   content.innerHTML = conv.messages.map(m => messageHTML(m)).join('');
+  if (window.renderMathInElement) {
+    window.renderMathInElement(content, {
+      delimiters: [
+        { left: '$$', right: '$$', display: true },
+        { left: '\\[', right: '\\]', display: true },
+        { left: '\\(', right: '\\)', display: false }
+      ],
+      throwOnError: false
+    });
+  }
   scrollToBottom();
 }
 
@@ -3344,6 +3400,12 @@ function renderWelcome() {
   `;
 }
 
+function renderAssistantContent(content) {
+  const source = String(content || '');
+  if (!window.marked?.parse || !window.DOMPurify) return escapeHtml(source).replace(/\n/g, '<br>');
+  return window.DOMPurify.sanitize(window.marked.parse(source));
+}
+
 function messageHTML(m) {
   const isUser = m.role === 'user';
   const avatar = isUser
@@ -3386,12 +3448,15 @@ function messageHTML(m) {
   const timestamp = State.settings.showTimestamps
     ? `<span class="msg-timestamp">${formatTime(m.timestamp)}</span>`
     : '';
+  const renderedContent = isUser
+    ? escapeHtml(m.content).replace(/\n/g, '<br>')
+    : renderAssistantContent(m.content);
 
   return `
     <div class="message ${m.role}" data-msg-id="${m.id}">
       ${avatar}
       <div class="message-body">
-        <div class="message-content">${m.content}</div>
+        <div class="message-content">${renderedContent}</div>
         <div style="display:flex;align-items:center;gap:4px;">
           ${actions}
           ${timestamp}
@@ -3437,7 +3502,91 @@ function createConversation() {
 }
 
 function saveConversations() {
-  DB.save(DB.keys.conversations, State.conversations);
+  DB.save(conversationStorageKey(), State.conversations);
+  if (!supabaseClient || !State.user) return;
+  conversationSync = conversationSync.then(async () => {
+    for (const conversation of State.conversations) {
+      if (!conversation.remoteId) {
+        const { data, error } = await supabaseClient.from('chat_sessions')
+          .insert({ user_id: State.user.id, title: conversation.title, model: MODELS[State.model]?.provider || 'gemini' })
+          .select('id').single();
+        if (error) throw error;
+        conversation.remoteId = data.id;
+      }
+      for (const message of conversation.messages) {
+        if (message.dbId && message.persistedContent === message.content) continue;
+        if (message.dbId) {
+          const { error } = await supabaseClient.from('chat_messages')
+            .update({ content: message.content }).eq('id', message.dbId);
+          if (error) throw error;
+        } else {
+          const { data, error } = await supabaseClient.from('chat_messages')
+            .insert({
+              session_id: conversation.remoteId,
+              user_id: State.user.id,
+              role: message.role === 'assistant' ? 'assistant' : 'user',
+              content: message.content,
+              model: MODELS[State.model]?.provider || 'gemini'
+            })
+            .select('id').single();
+          if (error) throw error;
+          message.dbId = data.id;
+        }
+        message.persistedContent = message.content;
+      }
+      await supabaseClient.from('chat_sessions')
+        .update({ title: conversation.title, updated_at: new Date().toISOString() })
+        .eq('id', conversation.remoteId);
+    }
+  }).catch(error => {
+    console.error('Conversation sync failed:', error);
+    showToast(error.message || 'Could not save this conversation.', 'error');
+  });
+}
+
+let conversationSync = Promise.resolve();
+
+function conversationStorageKey() {
+  return State.user ? `${DB.keys.conversations}_${State.user.id}` : DB.keys.conversations;
+}
+
+async function loadConversationsFromDB() {
+  if (!supabaseClient || !State.user) return;
+  const { data: sessions, error } = await supabaseClient.from('chat_sessions')
+    .select('id, title, created_at, updated_at')
+    .order('updated_at', { ascending: false });
+  if (error) throw error;
+  const rows = sessions?.length
+    ? await supabaseClient.from('chat_messages')
+      .select('id, session_id, role, content, created_at')
+      .in('session_id', sessions.map(session => session.id))
+      .order('created_at', { ascending: true })
+    : { data: [] };
+  if (rows.error) throw rows.error;
+
+  State.conversations = (sessions || []).map(session => ({
+    id: session.id,
+    remoteId: session.id,
+    title: session.title,
+    createdAt: new Date(session.created_at).getTime(),
+    updatedAt: new Date(session.updated_at).getTime(),
+    starred: false,
+    archived: false,
+    messages: (rows.data || []).filter(message => message.session_id === session.id).map(message => ({
+      id: message.id,
+      dbId: message.id,
+      persistedContent: message.content,
+      role: message.role,
+      content: message.content,
+      timestamp: new Date(message.created_at).getTime(),
+      attachments: []
+    }))
+  }));
+  if (!State.conversations.length) State.activeConversationId = null;
+  else State.activeConversationId = State.conversations[0].id;
+  DB.save(conversationStorageKey(), State.conversations);
+  renderSidebar();
+  renderChat();
 }
 
 function addMessage(role, content, attachments = []) {
@@ -3502,7 +3651,7 @@ async function sendMessage() {
   autoResizeTextarea();
 
   // Add user message
-  addMessage('user', escapeHtml(text).replace(/\n/g, '<br>'), attachmentMeta);
+  addMessage('user', text, attachmentMeta);
   scrollToBottom();
 
   // Show typing indicator
@@ -3533,7 +3682,17 @@ async function sendMessage() {
   // Generate AI response
   State.generationAbort = false;
   try {
-    const response = await AIEngine.generate(text || 'User shared files', null);
+    const response = await AIEngine.generate(
+      conv.messages.map(message => ({
+        role: message.role === 'assistant' ? 'assistant' : 'user',
+        content: message.content
+      })),
+      partial => {
+        const body = typingEl.querySelector('.message-body');
+        if (body) body.innerHTML = `<div class="message-content">${renderAssistantContent(partial)}</div>`;
+        scrollToBottom();
+      }
+    );
 
     // Remove typing indicator
     typingEl.remove();
@@ -3543,7 +3702,7 @@ async function sendMessage() {
     scrollToBottom();
   } catch (e) {
     typingEl.remove();
-    showToast('AI is temporarily unavailable. Please try again.', 'error');
+    showToast(e.message || 'AI is temporarily unavailable. Please try again.', 'error');
   }
 }
 
@@ -4923,11 +5082,15 @@ function confirmSignOut() {
   });
 
   setTimeout(() => {
-    $('#confirmSignOutBtn')?.addEventListener('click', () => {
-      Auth.signOut();
-      document.querySelector('.modal-overlay .modal-close')?.click();
-      showAuthScreen();
-      showToast('Signed out', 'success', 2000);
+    $('#confirmSignOutBtn')?.addEventListener('click', async () => {
+      try {
+        await Auth.signOut();
+        document.querySelector('.modal-overlay .modal-close')?.click();
+        showAuthScreen();
+        showToast('Signed out', 'success', 2000);
+      } catch (error) {
+        showToast(error.message || 'Could not sign out.', 'error');
+      }
     });
   }, 100);
 }
@@ -4970,11 +5133,11 @@ function renderAuth(mode) {
       </div>
       <button class="btn btn-primary btn-block" id="signupSubmitBtn" style="margin-top:8px;">Create account</button>
       <div class="auth-divider">or continue with</div>
-      <button class="social-btn" onclick="showToast('Google sign-up is demo-only','info')">
+      <button class="social-btn" onclick="signInOAuth('google')">
         <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
         Continue with Google
       </button>
-      <button class="social-btn" onclick="showToast('Apple sign-up is demo-only','info')">
+      <button class="social-btn" onclick="signInOAuth('apple')">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
         Continue with Apple
       </button>
@@ -4986,7 +5149,7 @@ function renderAuth(mode) {
   } else if (mode === 'forgot') {
     content.innerHTML = `
       <h2 class="auth-title">Reset password</h2>
-      <p class="auth-subtitle">Enter your email and we'll send you a reset link (demo).</p>
+      <p class="auth-subtitle">Enter your email and we'll send you a password reset link.</p>
       <div class="form-group">
         <label class="form-label" for="forgotEmail">Email</label>
         <input class="form-input" id="forgotEmail" type="email" placeholder="alex@example.com">
@@ -5020,11 +5183,11 @@ function renderAuth(mode) {
       </div>
       <button class="btn btn-primary btn-block" id="signinSubmitBtn">Sign in</button>
       <div class="auth-divider">or continue with</div>
-      <button class="social-btn" onclick="showToast('Google sign-in is demo-only','info')">
+      <button class="social-btn" onclick="signInOAuth('google')">
         <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
         Continue with Google
       </button>
-      <button class="social-btn" onclick="showToast('Apple sign-in is demo-only','info')">
+      <button class="social-btn" onclick="signInOAuth('apple')">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
         Continue with Apple
       </button>
@@ -5061,7 +5224,7 @@ function validateEmail(email) {
 
 function bindSignin() {
   const btn = $('#signinSubmitBtn');
-  btn?.addEventListener('click', () => {
+  btn?.addEventListener('click', async () => {
     const email = $('#signinEmail').value.trim();
     const password = $('#signinPassword').value;
     let valid = true;
@@ -5077,15 +5240,18 @@ function bindSignin() {
 
     if (!valid) return;
 
-    Auth.signIn({ email, password });
-    showApp();
-    showToast('Welcome back!', 'success', 2000);
+    try {
+      await Auth.signIn({ email, password });
+      showToast('Welcome back!', 'success', 2000);
+    } catch (error) {
+      showFieldError('signinPasswordError', error.message || 'Sign in failed.');
+    }
   });
 }
 
 function bindSignup() {
   const btn = $('#signupSubmitBtn');
-  btn?.addEventListener('click', () => {
+  btn?.addEventListener('click', async () => {
     const name = $('#signupName').value.trim();
     const email = $('#signupEmail').value.trim();
     const password = $('#signupPassword').value;
@@ -5103,23 +5269,44 @@ function bindSignup() {
 
     if (!valid) return;
 
-    Auth.signUp({ name, email, password });
-    showApp();
-    showToast('Account created! Welcome to SquareAI.', 'success', 2500);
+    try {
+      const result = await Auth.signUp({ name, email, password });
+      if (result.session) {
+        showToast('Account created! Welcome to SquareAI.', 'success', 2500);
+      } else {
+        showToast('Check your email to confirm your account.', 'info', 3500);
+        renderAuth('signin');
+      }
+    } catch (error) {
+      showFieldError('signupPasswordError', error.message || 'Account creation failed.');
+    }
   });
+}
+
+async function signInOAuth(provider) {
+  try {
+    await Auth.signInWithOAuth(provider);
+  } catch (error) {
+    showToast(error.message || 'Social sign in failed.', 'error');
+  }
 }
 
 function bindForgot() {
   const btn = $('#forgotSubmitBtn');
-  btn?.addEventListener('click', () => {
+  btn?.addEventListener('click', async () => {
     const email = $('#forgotEmail').value.trim();
     clearFieldError('forgotEmailError');
     if (!email || !validateEmail(email)) {
       showFieldError('forgotEmailError', 'Please enter a valid email');
       return;
     }
-    showToast('Reset link sent (demo)', 'success', 2500);
-    renderAuth('signin');
+    if (!supabaseClient) {
+      showToast('Supabase is not configured.', 'error');
+      return;
+    }
+    const { error } = await supabaseClient.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+    if (error) showFieldError('forgotEmailError', error.message);
+    else showToast('Password reset email sent.', 'success', 2500);
   });
 }
 
@@ -5191,6 +5378,55 @@ function showUsage() {
 // ================================================================
 // 28. HELP CENTER
 // ================================================================
+const HELP_ARTICLES = {
+  'first-chat': {
+    title: 'Creating your first chat',
+    body: '<p>Select <strong>New Chat</strong>, type your question in the composer, then press Enter or select Send. Your signed-in chats are saved to your account.</p>'
+  },
+  interface: {
+    title: 'Understanding the interface',
+    body: '<p>The sidebar contains recent, starred, and archived conversations. The model selector is in the top bar. Write in the composer at the bottom; use the sidebar settings for account and appearance options.</p>'
+  },
+  models: {
+    title: 'Choosing the right model',
+    body: '<ul><li><strong>Smart</strong> and <strong>Fast</strong> use Gemini.</li><li><strong>Reasoning</strong> uses Claude.</li><li><strong>Coding</strong> uses OpenAI.</li></ul><p>The chosen provider must have its server API key configured.</p>'
+  },
+  attachments: {
+    title: 'Sending messages and attachments',
+    body: '<p>Use the paperclip or image button to add files to the composer. Text prompts are sent to the AI. File and image contents are not yet uploaded to the AI provider, so do not rely on responses analyzing attached file contents.</p>'
+  },
+  editing: {
+    title: 'Editing and regenerating responses',
+    body: '<p>Use the edit icon under your message to revise it and request a new reply. Use the regenerate icon under an assistant reply to ask the selected provider for another response.</p>'
+  },
+  voice: {
+    title: 'Using voice input',
+    body: '<p>Select the microphone button and allow microphone access when your browser asks. Voice input depends on browser speech-recognition support; select the microphone again to stop listening.</p>'
+  },
+  projects: {
+    title: 'Creating and managing projects',
+    body: '<p>Select the plus button beside Projects to create a local project. Projects are currently stored in this browser and are not synced to your Supabase account.</p>'
+  },
+  projectFiles: {
+    title: 'Adding files to projects',
+    body: '<p>Project file management is not connected yet. The chat attachment controls can select files, but file contents are not uploaded or saved to project storage.</p>'
+  },
+  appearance: {
+    title: 'Customizing appearance',
+    body: '<p>Open Settings, then Appearance to choose light, dark, or system theme. General settings include chat display and keyboard behavior.</p>'
+  },
+  account: {
+    title: 'Managing your account',
+    body: '<p>Sign in and sign up use Supabase Auth. Your chat history is stored in the account database. Use the visible Sign out button in the sidebar to end your session.</p>'
+  }
+};
+
+function openHelpArticle(articleId) {
+  const article = HELP_ARTICLES[articleId];
+  if (!article) return;
+  openModal({ title: article.title, body: article.body, narrow: true });
+}
+
 function showHelp() {
   const content = $('#chatContent');
   $('#topbarTitle').textContent = 'Help Center';
@@ -5209,15 +5445,15 @@ function showHelp() {
 
       <div class="help-category">
         <div class="help-category-title">Getting Started</div>
-        <div class="help-article" onclick="showToast('Article: Creating your first chat','info')">
+        <div class="help-article" onclick="openHelpArticle('first-chat')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
           Creating your first chat
         </div>
-        <div class="help-article" onclick="showToast('Article: Understanding the interface','info')">
+        <div class="help-article" onclick="openHelpArticle('interface')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
           Understanding the interface
         </div>
-        <div class="help-article" onclick="showToast('Article: Choosing the right model','info')">
+        <div class="help-article" onclick="openHelpArticle('models')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
           Choosing the right model
         </div>
@@ -5225,15 +5461,15 @@ function showHelp() {
 
       <div class="help-category">
         <div class="help-category-title">Using Chat</div>
-        <div class="help-article" onclick="showToast('Article: Sending messages and attachments','info')">
+        <div class="help-article" onclick="openHelpArticle('attachments')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
           Sending messages and attachments
         </div>
-        <div class="help-article" onclick="showToast('Article: Editing and regenerating responses','info')">
+        <div class="help-article" onclick="openHelpArticle('editing')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
           Editing and regenerating responses
         </div>
-        <div class="help-article" onclick="showToast('Article: Using voice input','info')">
+        <div class="help-article" onclick="openHelpArticle('voice')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
           Using voice input
         </div>
@@ -5241,11 +5477,11 @@ function showHelp() {
 
       <div class="help-category">
         <div class="help-category-title">Projects</div>
-        <div class="help-article" onclick="showToast('Article: Creating and managing projects','info')">
+        <div class="help-article" onclick="openHelpArticle('projects')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
           Creating and managing projects
         </div>
-        <div class="help-article" onclick="showToast('Article: Adding files to projects','info')">
+        <div class="help-article" onclick="openHelpArticle('projectFiles')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
           Adding files to projects
         </div>
@@ -5253,11 +5489,11 @@ function showHelp() {
 
       <div class="help-category">
         <div class="help-category-title">Settings</div>
-        <div class="help-article" onclick="showToast('Article: Customizing appearance','info')">
+        <div class="help-article" onclick="openHelpArticle('appearance')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
           Customizing appearance
         </div>
-        <div class="help-article" onclick="showToast('Article: Managing your account','info')">
+        <div class="help-article" onclick="openHelpArticle('account')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
           Managing your account
         </div>
@@ -5335,6 +5571,7 @@ function bindEvents() {
 
   // Settings
   $('#settingsBtn')?.addEventListener('click', () => openSettings('general'));
+  $('#signOutBtn')?.addEventListener('click', confirmSignOut);
 
   // User menu
   $('#userMenuBtn')?.addEventListener('click', (e) => {
@@ -5565,11 +5802,43 @@ function showApp() {
   focusInput();
 }
 
-function init() {
+async function applySupabaseSession(session) {
+  if (!session) {
+    State.session = null;
+    State.user = null;
+    State.conversations = [];
+    State.activeConversationId = null;
+    showAuthScreen();
+    return;
+  }
+  if (State.user && State.session?.access_token === session.access_token) return;
+
+  State.session = session;
+  State.user = {
+    id: session.user.id,
+    name: session.user.user_metadata?.name || session.user.user_metadata?.full_name || session.user.email.split('@')[0],
+    email: session.user.email,
+    createdAt: session.user.created_at,
+    plan: 'free'
+  };
+  State.conversations = DB.load(conversationStorageKey(), []);
+  try {
+    const { data: profile } = await supabaseClient.from('profiles')
+      .select('name, created_at').eq('id', State.user.id).maybeSingle();
+    if (profile?.name) State.user.name = profile.name;
+    await loadConversationsFromDB();
+  } catch (error) {
+    console.error('Could not load saved chats:', error);
+    showToast(error.message || 'Saved chats could not be loaded.', 'error');
+  }
+  showApp();
+}
+
+async function init() {
   // Load state
-  State.user = DB.load(DB.keys.user);
-  State.session = DB.load(DB.keys.session);
-  State.conversations = DB.load(DB.keys.conversations, []);
+  State.user = null;
+  State.session = null;
+  State.conversations = [];
   State.projects = DB.load(DB.keys.projects, []);
   State.settings = Object.assign(State.settings, DB.load(DB.keys.settings, {}));
   State.model = DB.load(DB.keys.model, 'smart');
@@ -5583,15 +5852,23 @@ function init() {
     $('#sidebar')?.classList.add('collapsed');
   }
 
-  // Check auth
-  if (Auth.isAuthenticated()) {
-    showApp();
-  } else {
-    showAuthScreen();
-  }
-
   // Bind events
   bindEvents();
+
+  if (!supabaseClient) {
+    showAuthScreen();
+    showToast('Supabase failed to load. Check the public configuration and network.', 'error');
+    return;
+  }
+  supabaseClient.auth.onAuthStateChange((_event, session) => {
+    Promise.resolve().then(() => applySupabaseSession(session)).catch(error => {
+      console.error('Auth state update failed:', error);
+      showToast(error.message || 'Account state could not be loaded.', 'error');
+    });
+  });
+  const { data, error } = await supabaseClient.auth.getSession();
+  if (error) showToast(error.message || 'Could not restore your session.', 'error');
+  await applySupabaseSession(data?.session || null);
 
   // Welcome message
   console.log('%cSquareAI v1.0', 'font-size:18px;font-weight:bold;color:#2e6b4e;');
