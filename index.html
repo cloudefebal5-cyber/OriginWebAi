@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>SquareAI · Think. Create. Build.</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <script>
     window.SQUAREAI_CONFIG = {
       SUPABASE_URL: 'https://fcewsjtjwvalksjjebob.supabase.co',
@@ -3125,7 +3126,11 @@ const AIEngine = {
         body: JSON.stringify({
           model: MODELS[State.model]?.provider || 'gemini',
           system: SQUAREAI_SYSTEM_PROMPT,
-          messages: messages.map(message => ({ role: message.role, content: message.content }))
+          messages: messages.map(message => ({
+            role: message.role,
+            content: message.content,
+            images: message.images || []
+          }))
         }),
         signal: controller.signal
       });
@@ -3633,14 +3638,16 @@ async function sendMessage() {
   const attachments = [...State.attachments];
   if (!text && attachments.length === 0) return;
 
-  // Capture attachments before clearing
+  const images = attachments.filter(a => a.isImage && a.dataUrl).map(a => ({
+    mimeType: a.type || 'image/jpeg',
+    data: a.dataUrl.split(',')[1]
+  }));
   const attachmentMeta = attachments.map(a => ({
     id: a.id,
     name: a.name,
     size: a.size,
     type: a.type,
-    isImage: a.isImage,
-    dataUrl: a.dataUrl || null
+    isImage: a.isImage
   }));
 
   // Clear input
@@ -3651,7 +3658,11 @@ async function sendMessage() {
   autoResizeTextarea();
 
   // Add user message
-  addMessage('user', text, attachmentMeta);
+  const userMessage = addMessage(
+    'user',
+    text || (images.length ? 'Please analyze the attached image(s).' : 'Please review the attached files.'),
+    attachmentMeta
+  );
   scrollToBottom();
 
   // Show typing indicator
@@ -3685,7 +3696,8 @@ async function sendMessage() {
     const response = await AIEngine.generate(
       conv.messages.map(message => ({
         role: message.role === 'assistant' ? 'assistant' : 'user',
-        content: message.content
+        content: message.content,
+        images: message.id === userMessage.id ? images : []
       })),
       partial => {
         const body = typingEl.querySelector('.message-body');
@@ -3864,34 +3876,84 @@ function focusInput() {
 // ================================================================
 // 14. FILE ATTACHMENTS
 // ================================================================
-function handleFiles(files, isImage = false) {
-  Array.from(files).forEach(file => {
-    const reader = new FileReader();
-    const isImg = file.type.startsWith('image/');
+async function prepareImageForAI(file) {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = () => reject(new Error('The image could not be opened.'));
+      image.src = objectUrl;
+    });
+
+    const maxBytes = 700 * 1024;
+    const longestSide = Math.max(image.naturalWidth, image.naturalHeight);
+    let maxDimension = Math.min(1600, longestSide);
+    let quality = 0.82;
+    let blob;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const scale = Math.min(1, maxDimension / longestSide);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+      blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+      if (!blob) throw new Error('The image could not be prepared.');
+      if (blob.size <= maxBytes) break;
+      if (quality > 0.56) quality = Math.max(0.5, quality - 0.1);
+      else {
+        maxDimension = Math.max(512, Math.floor(maxDimension * 0.8));
+        quality = 0.82;
+      }
+    }
+    if (blob.size > maxBytes) throw new Error('The image is too large to send.');
+
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('The image could not be read.'));
+      reader.readAsDataURL(blob);
+    });
+    return { dataUrl, size: blob.size, type: 'image/jpeg' };
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function handleFiles(files, isImage = false) {
+  const selectedFiles = Array.from(files || []);
+  const newImages = selectedFiles.filter(file => isImage || file.type.startsWith('image/'));
+  const existingImages = State.attachments.filter(attachment => attachment.isImage).length;
+  if (existingImages + newImages.length > 4) {
+    showToast('You can attach up to 4 photos per message.', 'error');
+    return;
+  }
+
+  let attachedCount = 0;
+  for (const file of selectedFiles) {
+    const imageSelected = file.type.startsWith('image/') || isImage;
     const attachment = {
       id: generateId('att_'),
       name: file.name,
       size: file.size,
       type: file.type,
-      isImage: isImg || isImage,
+      isImage: imageSelected,
       dataUrl: null
     };
-
-    if (isImg || isImage) {
-      reader.onload = (e) => {
-        attachment.dataUrl = e.target.result;
-        State.attachments.push(attachment);
-        renderAttachments();
-        updateSendButton();
-      };
-      reader.readAsDataURL(file);
-    } else {
-      State.attachments.push(attachment);
-      renderAttachments();
-      updateSendButton();
+    if (imageSelected) {
+      try {
+        Object.assign(attachment, await prepareImageForAI(file));
+      } catch (error) {
+        showToast(`${file.name}: ${error.message}`, 'error');
+        continue;
+      }
     }
-  });
-  showToast(files.length + ' file(s) attached', 'info', 2000);
+    State.attachments.push(attachment);
+    attachedCount++;
+  }
+  renderAttachments();
+  updateSendButton();
+  if (attachedCount) showToast(`${attachedCount} file(s) attached`, 'info', 2000);
 }
 
 function renderAttachments() {
@@ -5393,7 +5455,7 @@ const HELP_ARTICLES = {
   },
   attachments: {
     title: 'Sending messages and attachments',
-    body: '<p>Use the paperclip or image button to add files to the composer. Text prompts are sent to the AI. File and image contents are not yet uploaded to the AI provider, so do not rely on responses analyzing attached file contents.</p>'
+    body: '<p>Use the image button or paperclip to add files. Up to four photos are compressed and sent to Gemini for visual analysis. Document contents are not yet sent to the AI, and photo questions require the Smart or Fast Gemini model.</p>'
   },
   editing: {
     title: 'Editing and regenerating responses',
