@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>SquareAI · Think. Create. Build.</title>
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <script>
     window.SQUAREAI_CONFIG = {
       SUPABASE_URL: 'https://fcewsjtjwvalksjjebob.supabase.co',
@@ -2765,7 +2765,7 @@ const supabaseClient = CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY && window
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
     })
   : null;
-const SQUAREAI_SYSTEM_PROMPT = `You are SquareAI, an AI assistant created by programmer Anshu. If asked your name, identify yourself as SquareAI, never as Gemini. If asked who made you or who your founder is, say: "Mujhe programmer Anshu ne banaya hai." For math, explain like a school textbook: show the formula, put each calculation on its own line, explain steps, and clearly mark the final answer. Use LaTeX with \\( ... \\) inline and $$ ... $$ for displayed equations. Reply in the user's language.`;
+const SQUAREAI_SYSTEM_PROMPT = `You are SquareAI, an AI assistant created by programmer Anshu. If asked your name, identify yourself as SquareAI, never as Gemini. If asked who made you or who your founder is, say: "Mujhe programmer Anshu ne banaya hai." For math, explain like a school textbook: show the formula, put each calculation on its own line, explain steps, and clearly mark the final answer. Put every inline formula inside \\( ... \\) and every standalone formula or derivation inside $$ ... $$. Never leave LaTeX commands such as \\int, \\frac, or \\implies as unwrapped plain text. Reply in the user's language.`;
 
 function generateId(prefix = '') {
   return prefix + Math.random().toString(36).substring(2, 10) + Date.now().toString(36).slice(-4);
@@ -3348,7 +3348,8 @@ function renderChat() {
       delimiters: [
         { left: '$$', right: '$$', display: true },
         { left: '\\[', right: '\\]', display: true },
-        { left: '\\(', right: '\\)', display: false }
+        { left: '\\(', right: '\\)', display: false },
+        { left: '$', right: '$', display: false }
       ],
       throwOnError: false
     });
@@ -3408,7 +3409,23 @@ function renderWelcome() {
 function renderAssistantContent(content) {
   const source = String(content || '');
   if (!window.marked?.parse || !window.DOMPurify) return escapeHtml(source).replace(/\n/g, '<br>');
-  return window.DOMPurify.sanitize(window.marked.parse(source));
+  const protectedDelimiters = [
+    [/\\\(/g, 'SQUAREAI_MATH_INLINE_OPEN'],
+    [/\\\)/g, 'SQUAREAI_MATH_INLINE_CLOSE'],
+    [/\\\[/g, 'SQUAREAI_MATH_DISPLAY_OPEN'],
+    [/\\\]/g, 'SQUAREAI_MATH_DISPLAY_CLOSE']
+  ];
+  let markdown = source;
+  for (const [pattern, token] of protectedDelimiters) markdown = markdown.replace(pattern, token);
+  let html = window.marked.parse(markdown);
+  const restoredDelimiters = [
+    ['SQUAREAI_MATH_INLINE_OPEN', '\\('],
+    ['SQUAREAI_MATH_INLINE_CLOSE', '\\)'],
+    ['SQUAREAI_MATH_DISPLAY_OPEN', '\\['],
+    ['SQUAREAI_MATH_DISPLAY_CLOSE', '\\]']
+  ];
+  for (const [token, delimiter] of restoredDelimiters) html = html.replaceAll(token, delimiter);
+  return window.DOMPurify.sanitize(html);
 }
 
 function messageHTML(m) {
