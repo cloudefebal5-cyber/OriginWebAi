@@ -60,6 +60,15 @@ module.exports = async function handler(req, res) {
     return;
   }
   const provider = ['claude', 'openai', 'gemini'].includes(model) ? model : 'gemini';
+  const imageError = validateImages(messages);
+  if (imageError) {
+    res.status(400).json({ message: imageError });
+    return;
+  }
+  if (messages.some(message => message.images?.length) && provider !== 'gemini') {
+    res.status(400).json({ message: 'Photo questions currently require the SquareAI Smart or Fast Gemini model.' });
+    return;
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 55000);
@@ -86,6 +95,26 @@ module.exports = async function handler(req, res) {
     void userId;
   }
 };
+
+function validateImages(messages) {
+  const images = messages.flatMap(message => Array.isArray(message.images) ? message.images : []);
+  if (images.length > 4) return 'You can send up to 4 photos at once.';
+
+  let totalBytes = 0;
+  for (const image of images) {
+    if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'image/heif'].includes(image.mimeType)) {
+      return 'This photo format is not supported. Use JPEG, PNG, WebP, GIF, HEIC, or HEIF.';
+    }
+    if (typeof image.data !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(image.data)) {
+      return 'The photo data is invalid. Please attach the image again.';
+    }
+    const imageBytes = Math.floor(image.data.length * 3 / 4);
+    if (imageBytes > 700 * 1024) return 'Each compressed photo must be 700 KB or smaller.';
+    totalBytes += imageBytes;
+  }
+  if (totalBytes > 3 * 1024 * 1024) return 'The combined photos exceed the request size limit.';
+  return null;
+}
 
 function friendlyProviderError(err, provider) {
   if (err?.name === 'AbortError') return 'The AI provider took too long to respond.';
@@ -172,7 +201,12 @@ async function streamGemini(messages, system, signal, send) {
 async function streamGeminiModel(model, key, messages, system, signal, send) {
   const contents = messages.map(m => ({
     role: m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }],
+    parts: [
+      ...(m.content ? [{ text: m.content }] : []),
+      ...(m.images || []).map(image => ({
+        inlineData: { mimeType: image.mimeType, data: image.data }
+      }))
+    ],
   }));
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${key}`;
   const resp = await fetch(url, {
