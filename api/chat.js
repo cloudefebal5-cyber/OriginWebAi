@@ -7,8 +7,24 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MODELS = {
   claude: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6',
   openai: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-  gemini: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
+  gemini: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
 };
+// Standard chat models listed as free in Gemini pricing; override with a comma-separated env value.
+const GEMINI_FREE_FALLBACKS = (process.env.GEMINI_FALLBACK_MODELS || [
+  'gemini-3.8-flash',
+  'gemini-3.7-flash',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-3-flash-preview',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-pro',
+].join(','))
+  .split(',')
+  .map(model => model.trim())
+  .filter(Boolean);
 
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -62,7 +78,7 @@ module.exports = async function handler(req, res) {
     else await streamGemini(messages, system, controller.signal, send);
   } catch (err) {
     console.error(`[${provider}] stream error:`, err);
-    send({ error: friendlyProviderError(err) });
+    send({ error: friendlyProviderError(err, provider) });
   } finally {
     clearTimeout(timeout);
     res.write('data: [DONE]\n\n');
@@ -71,9 +87,12 @@ module.exports = async function handler(req, res) {
   }
 };
 
-function friendlyProviderError(err) {
+function friendlyProviderError(err, provider) {
   if (err?.name === 'AbortError') return 'The AI provider took too long to respond.';
+  if (provider === 'gemini' && err?.modelUnavailable) return 'The available Gemini models are not enabled for this API project.';
   if (err?.status === 401 || err?.status === 403) return 'Invalid or missing API key on the server for this provider.';
+  if (provider === 'gemini' && err?.status === 429) return 'All configured Gemini models are at their current free-tier limits. Please try again later.';
+  if (provider === 'gemini' && err?.status === 404) return 'None of the configured Gemini chat models is available to this API project.';
   if (err?.status === 429) return 'The AI provider is rate-limiting requests. Please try again shortly.';
   if (err?.status) return `The AI provider returned an error (${err.status}).`;
   return 'Could not reach the AI provider.';
@@ -135,11 +154,27 @@ async function streamOpenAI(messages, system, signal, send) {
 async function streamGemini(messages, system, signal, send) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) { send({ error: 'AI_PROVIDER_NOT_CONFIGURED: set GEMINI_API_KEY on the server' }); return; }
+  const models = [...new Set([MODELS.gemini, ...GEMINI_FREE_FALLBACKS])];
+  for (let index = 0; index < models.length; index++) {
+    try {
+      await streamGeminiModel(models[index], key, messages, system, signal, send);
+      return;
+    } catch (error) {
+      const canFallback = ([404, 429, 503].includes(error.status) || error.modelUnavailable)
+        && !error.partialResponse
+        && index < models.length - 1;
+      if (!canFallback) throw error;
+      console.warn(`Gemini model ${models[index]} unavailable (${error.status}); trying ${models[index + 1]}`);
+    }
+  }
+}
+
+async function streamGeminiModel(model, key, messages, system, signal, send) {
   const contents = messages.map(m => ({
     role: m.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: m.content }],
   }));
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODELS.gemini}:streamGenerateContent?alt=sse&key=${key}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${key}`;
   const resp = await fetch(url, {
     method: 'POST',
     signal,
@@ -149,11 +184,41 @@ async function streamGemini(messages, system, signal, send) {
       ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {})
     }),
   });
-  if (!resp.ok) { const t = await resp.text().catch(()=> ''); const e = new Error(t); e.status = resp.status; throw e; }
-  await pumpSSE(resp.body, (evt) => {
-    const delta = evt.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('');
-    if (delta) send({ delta });
-  });
+  if (!resp.ok) {
+    const message = await resp.text().catch(() => '');
+    const error = new Error(message);
+    error.status = resp.status;
+    error.modelUnavailable = resp.status === 403 && isGeminiModelAccessError(message);
+    throw error;
+  }
+  let sentText = false;
+  try {
+    await pumpSSE(resp.body, (evt) => {
+      if (evt.error) {
+        const error = new Error(evt.error.message || 'Gemini stream failed.');
+        error.status = Number(evt.error.code) || ({
+          RESOURCE_EXHAUSTED: 429,
+          UNAVAILABLE: 503,
+          NOT_FOUND: 404,
+          PERMISSION_DENIED: 403
+        })[evt.error.status];
+        error.modelUnavailable = error.status === 403 && isGeminiModelAccessError(error.message);
+        throw error;
+      }
+      const delta = evt.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('');
+      if (delta) {
+        sentText = true;
+        send({ delta });
+      }
+    });
+  } catch (error) {
+    error.partialResponse = sentText;
+    throw error;
+  }
+}
+
+function isGeminiModelAccessError(message) {
+  return /(?:model.{0,50}(?:not found|not available|unavailable|not enabled|not allowed|access denied|permission)|(?:access denied|permission denied).{0,50}model)/i.test(message);
 }
 
 async function pumpSSE(stream, onEvent) {
@@ -171,7 +236,9 @@ async function pumpSSE(stream, onEvent) {
       if (!trimmed.startsWith('data:')) continue;
       const payload = trimmed.slice(5).trim();
       if (!payload || payload === '[DONE]') continue;
-      try { onEvent(JSON.parse(payload)); } catch (e) { /* ignore partial/malformed chunk */ }
+      let event;
+      try { event = JSON.parse(payload); } catch (e) { continue; }
+      onEvent(event);
     }
   }
 }
