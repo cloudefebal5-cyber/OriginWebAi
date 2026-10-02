@@ -2484,12 +2484,30 @@
     }
 
     @media (max-width: 640px) {
+      .app {
+        width: 100vw;
+        min-width: 0;
+      }
+
+      .main {
+        min-width: 0;
+      }
+
       .chat-content {
         padding: 16px 14px 110px;
       }
 
       .composer-wrap {
         padding: 0 10px 12px;
+      }
+
+      .composer-inner {
+        gap: 6px;
+        padding: 8px 10px 8px 12px;
+      }
+
+      .composer-textarea {
+        font-size: 14px;
       }
 
       .suggestions-grid {
@@ -2500,12 +2518,25 @@
         font-size: 22px;
       }
 
+      .topbar {
+        padding: 0 10px;
+      }
+
       .topbar-title {
         max-width: 140px;
       }
 
       .topbar-center {
         display: none;
+      }
+
+      .topbar-right {
+        gap: 4px;
+      }
+
+      .sidebar {
+        width: min(84vw, 320px);
+        min-width: min(84vw, 320px);
       }
 
       .settings-sidebar {
@@ -4898,6 +4929,21 @@ function toggleArchive(convId) {
   showToast(conv.archived ? 'Conversation archived' : 'Conversation restored', 'success', 2000);
 }
 
+async function deleteConversationFromRemote(convId) {
+  const conv = State.conversations.find(c => c.id === convId);
+  if (!conv || !conv.remoteId || !supabaseClient || !State.user) return;
+
+  const { error: sessionError } = await supabaseClient.from('chat_sessions')
+    .delete()
+    .eq('id', conv.remoteId);
+  if (sessionError) throw sessionError;
+
+  const { error: messageError } = await supabaseClient.from('chat_messages')
+    .delete()
+    .eq('session_id', conv.remoteId);
+  if (messageError) throw messageError;
+}
+
 function confirmDeleteConversation(convId) {
   openModal({
     title: 'Delete conversation',
@@ -4910,16 +4956,28 @@ function confirmDeleteConversation(convId) {
   });
 
   setTimeout(() => {
-    $('#confirmDeleteBtn')?.addEventListener('click', () => {
-      State.conversations = State.conversations.filter(c => c.id !== convId);
-      if (State.activeConversationId === convId) {
-        State.activeConversationId = null;
+    $('#confirmDeleteBtn')?.addEventListener('click', async () => {
+      try {
+        const conv = State.conversations.find(c => c.id === convId);
+        if (conv?.remoteId && supabaseClient && State.user) {
+          await deleteConversationFromRemote(convId);
+        }
+
+        State.conversations = State.conversations.filter(c => c.id !== convId);
+        if (State.activeConversationId === convId) {
+          State.activeConversationId = null;
+        }
+        saveConversations();
+        renderSidebar();
+        renderChat();
+        showToast('Conversation deleted', 'success', 2000);
+      } catch (error) {
+        console.error('Conversation delete error:', error);
+        showToast(error.message || 'Could not delete this conversation.', 'error');
+        return;
+      } finally {
+        document.querySelector('.modal-overlay .modal-close')?.click();
       }
-      saveConversations();
-      renderSidebar();
-      renderChat();
-      showToast('Conversation deleted', 'success', 2000);
-      document.querySelector('.modal-overlay .modal-close')?.click();
     });
   }, 100);
 }
