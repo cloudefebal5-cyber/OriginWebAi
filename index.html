@@ -5930,12 +5930,39 @@ function bindEvents() {
 // ================================================================
 // 32. INITIALIZATION
 // ================================================================
+function setMobileSidebarState(open) {
+  const sidebar = $('#sidebar');
+  if (!sidebar) return;
+  if (window.innerWidth <= 1024) {
+    sidebar.classList.toggle('open', open);
+    const overlay = document.querySelector('.sidebar-overlay');
+    if (open) {
+      if (!overlay) {
+        const newOverlay = document.createElement('div');
+        newOverlay.className = 'sidebar-overlay';
+        newOverlay.addEventListener('click', () => setMobileSidebarState(false));
+        document.body.appendChild(newOverlay);
+      }
+    } else if (overlay) {
+      overlay.remove();
+    }
+  } else {
+    sidebar.classList.remove('open');
+    document.querySelector('.sidebar-overlay')?.remove();
+  }
+}
+
 function showApp() {
   $('#authScreen').classList.add('hidden');
   $('#app').classList.remove('hidden');
   renderSidebar();
   renderChat();
   updateModelSelector();
+  if (window.innerWidth <= 1024 && State.user) {
+    setMobileSidebarState(true);
+  } else {
+    setMobileSidebarState(false);
+  }
   focusInput();
 }
 
