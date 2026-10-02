@@ -1054,6 +1054,32 @@
       pointer-events: none;
     }
 
+    .mobile-sidebar-trigger {
+      display: none;
+      width: 100%;
+      padding: 8px 14px 0;
+      cursor: pointer;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .mobile-sidebar-trigger-lines {
+      width: 28px;
+      height: 18px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      margin: 0 auto;
+      opacity: 0.8;
+    }
+
+    .mobile-sidebar-trigger-lines span {
+      display: block;
+      height: 2px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.75);
+    }
+
     .composer {
       max-width: 780px;
       margin: 0 auto;
@@ -2501,6 +2527,10 @@
         padding: 0 10px 12px;
       }
 
+      .mobile-sidebar-trigger {
+        display: block;
+      }
+
       .composer-inner {
         gap: 6px;
         padding: 8px 10px 8px 12px;
@@ -2730,6 +2760,14 @@
 
     <div class="chat-area" id="chatArea">
       <div class="chat-content" id="chatContent"></div>
+    </div>
+
+    <div class="mobile-sidebar-trigger" id="mobileSidebarTrigger" aria-label="Open menu">
+      <div class="mobile-sidebar-trigger-lines" aria-hidden="true">
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
     </div>
 
     <div class="composer-wrap" id="composerWrap">
@@ -5892,7 +5930,7 @@ function bindEvents() {
   });
 
   // Mobile menu
-  $('#mobileMenuBtn')?.addEventListener('click', () => {
+  const toggleMobileSidebar = () => {
     const sidebar = $('#sidebar');
     const isOpen = sidebar.classList.toggle('open');
     if (isOpen) {
@@ -5906,7 +5944,10 @@ function bindEvents() {
     } else {
       document.querySelector('.sidebar-overlay')?.remove();
     }
-  });
+  };
+
+  $('#mobileMenuBtn')?.addEventListener('click', toggleMobileSidebar);
+  $('#mobileSidebarTrigger')?.addEventListener('click', toggleMobileSidebar);
 
   // Search result clicks (event delegation)
   document.addEventListener('click', (e) => {
