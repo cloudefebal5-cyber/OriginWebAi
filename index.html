@@ -2626,6 +2626,29 @@
       clip: rect(0,0,0,0);
       border: 0;
     }
+
+    /* Mobile hamburger (opens sidebar) */
+    .float-menu-btn {
+      display: none;
+      position: fixed;
+      top: 12px;
+      left: 10px;
+      width: 40px;
+      height: 40px;
+      align-items: center;
+      justify-content: center;
+      border-radius: 10px;
+      background: var(--bg);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+      z-index: 30;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .float-menu-btn svg { width: 22px; height: 22px; }
+    @media (max-width: 1024px) {
+      .float-menu-btn { display: flex; }
+    }
   </style>
 </head>
 <body>
@@ -2735,6 +2758,9 @@
 
   <!-- MAIN AREA -->
   <main class="main" role="main">
+    <button class="float-menu-btn" id="floatMenuBtn" aria-label="Open sidebar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
     <header class="topbar">
       <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Open menu">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
@@ -5948,6 +5974,7 @@ function bindEvents() {
 
   $('#mobileMenuBtn')?.addEventListener('click', toggleMobileSidebar);
   $('#mobileSidebarTrigger')?.addEventListener('click', toggleMobileSidebar);
+  $('#floatMenuBtn')?.addEventListener('click', toggleMobileSidebar);
 
   // Search result clicks (event delegation)
   document.addEventListener('click', (e) => {
